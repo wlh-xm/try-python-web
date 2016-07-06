@@ -1,0 +1,140 @@
+#db.py
+
+#1.create_engine 函数中用到
+class DBError(Exception):
+	pass
+
+#全局变量
+engine = None
+
+#数据库引擎对象：
+class _Engine(object):
+
+	def __init__(self,connect):
+		self._connect = connect
+	def connect(self):
+		return self._connect()
+
+#create_engine函数是单独一个，不是包含在类中，注意
+def create_engine(user,password,database,host='127.0.0.1',port=3306,**kw):
+	import mysql,connector
+	#引入全局变量engine
+	global engine
+	if engine is not None:
+		raise DBError('Engine is already initialized.')
+	#创建一个dict
+	params = dict(user=user,passord=password,database=database,host=host,port=port)
+	defaults = dict(use_unicode=True,charset='utf8',collation='utf8_general_ci',autocommit=False)
+	#在params尾部添加defaults数目的kw参数,butaimingbai????
+	for k,v in defaults.iteritems():
+		params[k] = kw.pop(k,v)
+	params.update(kw)
+	params['buffered'] = True
+	#实例化类_Engine,从此可以看出此类只是简单封装一下数据库连接
+	engine = _Engine(lambda:mysql.connector.connect(**params))
+	#测试连接
+	logging.info('Init mysql engine <%s>ok.' %hex(id(engine)))
+
+
+#1._DbCtx类中调用
+class _LasyConnction(object):
+	def __init__(self):
+		self.connction = None
+
+	#光标
+	def cursor(self):
+		if self.connction is None:
+			connction = engine.connct()
+			loggine.info('open connection <%s>...' % hex(id(connection)))
+			self.connection = connection
+			#?????????
+		return self.connction.cursor()
+
+	def commit(self):
+		self.connection.commit()
+
+	def rollback(self):
+		self.connection.rollback()
+
+	def cleanup(self):
+		if self.connection:
+			connection = self.connection
+			self.connection = None
+			logging.info('close connection <%s>...' % hex(id(connection)))
+			connection.close()
+
+
+#持有数据库连接的上下文对象：
+#继承线程
+class _DbCtx(threading.local):
+	def __init__(self):
+		self.connection = None
+		self.transactions = 0
+
+	#判断是否初始化
+	def is_init(self):
+		return not self.connection is None
+
+	def init(self):
+		logging.info('open lazy connection...')
+		#
+		self.connection = _LasyConnection()
+		self.transaction = 0
+
+	def cleanup():
+		self.connection.cleanup()
+		self.connection = None
+
+	def cursor(self):
+		return self.connection.cursor()
+#实例化
+_db_ctx = _DbCtx()
+
+
+#数据连接内容，该对象可以打开或关闭连接内容，可被嵌套，但只有最外层连接起作用
+‘'''
+with connection():
+	pass
+	with connection():
+		pass
+ '''
+class _ConnectionCtx(object):
+	def __enter__(self):
+		#获得全局变量
+		global _db_ctx
+		self.should_cleanup = False
+		#初始化数据库连接
+		if not _db_ctx.is_init():
+			_db_ctx.init()
+			self.should_cleanup = True
+		return self
+
+	def __exit__(self,exctype,excvalue,traceback):
+		global _db_ctx
+		#最初cleanup是在lasyconnection中
+		if self.should_cleanup:
+			_db_ctx.cleanup()
+
+#单个函数，实例化_ConnectionCtx类
+def connection():
+	return _ConnectionCtx()
+
+#装饰器
+def with_connection(func):
+	@functools.wraps(func)
+	def _wrapper(*args,**kw):
+		with _ConnectionCtx():
+			return func(*args,**kw)
+	return _wrapper
+
+#数据库事务
+class _TransactionCtx(objec):
+	def __enter__(self):
+		global _db_ctx
+		self.should_close_conn = False
+		if not _db_ctx.is_init():
+			#首先打开一个连接
+			_db_ctx.init()
+
+
+
